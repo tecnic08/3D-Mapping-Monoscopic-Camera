@@ -9,8 +9,8 @@
 #include <image_transport/image_transport.h>
 #include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/PointCloud2.h>
-#include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <pcl/point_cloud.h>
 #include <pcl/conversions.h>
 #include <pcl_conversions/pcl_conversions.h>
 // OpenCV Header
@@ -32,7 +32,7 @@ using namespace cv;
 using namespace std;
 
 // Good Point border criteria
-int borderLeft = 75, borderRight = 900, borderLower = 265, borderUpper = 85;
+int borderLeft = 100, borderRight = 875, borderLower = 265, borderUpper = 85;
 
 // Warning, Danger trigger border criteria
 int triggerBorderLeft = 360, triggerBorderRight = 600, triggerBorderLower = 170, triggerBorderUpper = 85;
@@ -55,7 +55,7 @@ float deltaPos;
 Point2f currentPos;
 float currentYaw;
 float currentLinearMotion;
-float cameraHeight = 0.38;
+float cameraHeight = 0.19;
 float xDist, xDistC, height, horizonAngle, horizonAngleRad;
 vector<Point2f> locationOfInitiation;
 vector<int> calculateWithBackwardMotion;
@@ -75,15 +75,9 @@ float odomErrorCorrection = 1;
 
 // Set the desired point grid
 // For 960x540
-int desiredX[32] = { 100,125,150,175,200,225,250,275,300,325,350,375,400,425,450,475,500,525,
-                     550,575,600,625,650,675,700,725,750,775,800,825,850,875 };
+int desiredX[28] = { 150,175,200,225,250,275,300,325,350,375,400,425,450,475,500,525,
+                     550,575,600,625,650,675,700,725,750,775,800,825 };
 int desiredY[7] = { 100,125,150,175,200,225,250 };
-
-// Point accumulation check
-// For 960x540
-vector<int> pointAccumulationCheckIndex[9][3];
-int zoneBorderHorizontal[10] = {50,150,250,350,450,550,650,750,850,950};
-int zoneBorderVertical[4] = {80,160,240,280};
 
 // Camera calibration for undistortion
 	Mat cameraMatrix1 = (Mat_<double>(3,3) << 1.0501385794410448e+03, 0., 960., 0., 1.0501385794410448e+03,
@@ -139,8 +133,8 @@ public:
 void cbImu(const sensor_msgs::Imu::ConstPtr &msg)
 {
   // Assign IMU data from sensor msg to global variable
-  imuPitch = msg->orientation.y;
-  imuRoll = msg->orientation.x;
+  imuPitch = msg->orientation.x;
+  imuRoll = msg->orientation.y;
 }
 
   void spin()
@@ -161,7 +155,7 @@ void cbImu(const sensor_msgs::Imu::ConstPtr &msg)
   cap.set(CV_CAP_PROP_FRAME_HEIGHT,1080);
 
   // Push desired (x,y) in vector of desiredPoint
-  for (int i = 0; i < 32; i++)
+  for (int i = 0; i < 28; i++)
   {
     for (int j = 0; j < 7; j++)
     {
@@ -171,7 +165,7 @@ void cbImu(const sensor_msgs::Imu::ConstPtr &msg)
 
   // PointCloud initialization
   sensor_msgs::PointCloud2 pclMsg;
-  pcl::PointCloud<pcl::PointXYZ>::Ptr pc_ds(new pcl::PointCloud<pcl::PointXYZ>);
+  pcl::PointCloud<pcl::PointXYZRGB>::Ptr pc_ds(new pcl::PointCloud<pcl::PointXYZRGB>);
   pc_ds->header.frame_id = "base_link";
 
   TermCriteria terminationCriteria(CV_TERMCRIT_ITER | CV_TERMCRIT_EPS, 10, 0.02);
@@ -180,12 +174,12 @@ void cbImu(const sensor_msgs::Imu::ConstPtr &msg)
   Size windowSize(25, 25);
 
   // Max number of points
-  const int maxNumPoints = 238;
+  const int maxNumPoints = 196;
 
-  string windowName = "Height and Range finder";
+  string windowName = "3D Mapping with Monoscopic Camera";
   namedWindow(windowName, 1);
 
-  Mat prevGrayImage, curGrayImage, image, frame, originalDistortedFrame;
+  Mat prevGrayImage, curGrayImage, image, imagePreserved, frame, originalDistortedFrame;
   Mat map1, map2;
   Size imageSize;
   // trackingPoints is the current point.
@@ -226,6 +220,7 @@ void cbImu(const sensor_msgs::Imu::ConstPtr &msg)
     resize(frame, frame, Size(), scalingFactor, scalingFactor, INTER_AREA);
     
     frame.copyTo(image);
+    frame.copyTo(imagePreserved);
 
     cvtColor(image, curGrayImage, COLOR_BGR2GRAY);
 
@@ -375,8 +370,6 @@ void cbImu(const sensor_msgs::Imu::ConstPtr &msg)
         // Calculate displacement that the robot makes.
         deltaPos = sqrt((deltaX*deltaX)+(deltaY*deltaY));
 
-        //deltaPos = norm(currentPos - locationOfInitiation[goodPointsVecTransfer[i]]);
-
         // Push index of point that needs to be calculated as backward motion into a vector.
         if (deltaPos >= 0.29 && deltaPos <= 0.3)
         {
@@ -386,7 +379,6 @@ void cbImu(const sensor_msgs::Imu::ConstPtr &msg)
             if (calculateWithBackwardMotion.empty())
             {
               calculateWithBackwardMotion.push_back(goodPointsVecTransfer[i]);
-              //cout << "First point added to backward motion" << endl;
             }
             // If not empty, check that this index is not duplicated.
             else
@@ -414,7 +406,6 @@ void cbImu(const sensor_msgs::Imu::ConstPtr &msg)
                 if (calculateWithBackwardMotion[k] == goodPointsVecTransfer[i])
                 {
                   calculateWithBackwardMotion.erase(calculateWithBackwardMotion.begin() + k);
-                  //cout << "Point changed to forward motion " << goodPointsVecTransfer[i] << endl;
                 }
               }
             }
@@ -425,26 +416,7 @@ void cbImu(const sensor_msgs::Imu::ConstPtr &msg)
         {
           calculateWithBackwardMotion.push_back(goodPointsVecTransfer[i]);
           addToBackwardMotionVector = false;
-          //cout << "Added to backward motion [" << goodPointsVecTransfer[i] << "]" << endl;
         } 
-
-        // Point Accumulation Check by categorize point into zone.
-        for (int d = 0; d < 6; d++)
-        {
-          if (trackingPoints[1][goodPointsVecTransfer[i]].x >= zoneBorderHorizontal[d]
-              && trackingPoints[1][goodPointsVecTransfer[i]].x < zoneBorderHorizontal[d+1])
-          {
-            for (int e = 0; e < 3; e++)
-            {
-              if (trackingPoints[1][goodPointsVecTransfer[i]].y >= zoneBorderVertical[e]
-              && trackingPoints[1][goodPointsVecTransfer[i]].y < zoneBorderVertical[e+1])
-              {
-                pointAccumulationCheckIndex[d][e].push_back(goodPointsVecTransfer[i]);
-                break;
-              }
-            } 
-          }
-        }
 
         // Calculation Part
         if (deltaPos >= 0.4)
@@ -478,65 +450,34 @@ void cbImu(const sensor_msgs::Imu::ConstPtr &msg)
           if (height <= 0 || xDist <= 0)
               continue;
 
-          // Hightlight the point that is risky and print out the information
-          radius = 8;
-          thickness = 2;
-          lineType = 3;
-          if (trackingPoints[1][goodPointsVecTransfer[i]].x >= triggerBorderLeft && trackingPoints[1][goodPointsVecTransfer[i]].x <= triggerBorderRight)
-          {
-            if(trackingPoints[1][goodPointsVecTransfer[i]].y <= triggerBorderLower && trackingPoints[1][goodPointsVecTransfer[i]].y >= triggerBorderUpper)
-            {
-              if (height <= 1.2 && xDist <= 0.5)
-              {
-                if (!thereIsAPreviousLine)
-                  cout << endl;
-                // Highlight the point RED if it is dangerously close
-                circle(image, trackingPoints[1][goodPointsVecTransfer[i]], radius, Scalar(0, 0, 255), thickness, lineType);
-                cout << "*DANGER: Point " << goodPointsVecTransfer[i] <<": H = " << height <<"m D = " << xDist <<"m. Angle is " << horizonAngle << endl;
-                thereIsAPreviousLine = true;
-              }
-              else if (height <= 1.2 && xDist <= 1.0)
-              {
-                if (!thereIsAPreviousLine)
-                  cout << endl;
-                // Highlight the point ORANGE if it is risky.
-                circle(image, trackingPoints[1][goodPointsVecTransfer[i]], radius, Scalar(0, 144, 255), thickness, lineType);
-                cout << "WARNING: Point " << goodPointsVecTransfer[i] <<": H = " << height <<"m D = " << xDist <<"m. Angle is " << horizonAngle << endl;
-                thereIsAPreviousLine = true;
-              }
-            }
-          }
           // Save point to pcl points to be published
           if(currentYaw > -0.07 && currentYaw < 0.07)
           { 
-            if(xDist < 2.0)
-            {  
-              pc_ds->points.push_back (pcl::PointXYZ(xDist, tan(horizonAngleRad)*-xDist, height));
-              pointNeedsRecenter.push_back(goodPointsVecTransfer[i]);
+            if(xDist <= 2.0 && xDist >= 0.3)
+            { 
+              if (height >= 0.4)
+              {
+                pcl::PointXYZRGB tempPCLXYZRGBPoint;
+                tempPCLXYZRGBPoint.x = xDist;
+                tempPCLXYZRGBPoint.y = tan(horizonAngleRad)*-xDist;
+                tempPCLXYZRGBPoint.z = height;
+                tempPCLXYZRGBPoint.r = imagePreserved.at<cv::Vec3b>(trackingPoints[1][goodPointsVecTransfer[i]].y,trackingPoints[1][goodPointsVecTransfer[i]].x)[2];
+                tempPCLXYZRGBPoint.g = imagePreserved.at<cv::Vec3b>(trackingPoints[1][goodPointsVecTransfer[i]].y,trackingPoints[1][goodPointsVecTransfer[i]].x)[1];
+                tempPCLXYZRGBPoint.b = imagePreserved.at<cv::Vec3b>(trackingPoints[1][goodPointsVecTransfer[i]].y,trackingPoints[1][goodPointsVecTransfer[i]].x)[0];
+                pc_ds->points.push_back (tempPCLXYZRGBPoint);
+                pointNeedsRecenter.push_back(goodPointsVecTransfer[i]);
+                recenterOffGridPointFlag = true;
+              }
             }
             else
+            {
               pointNeedsRecenter.push_back(goodPointsVecTransfer[i]);
+              recenterOffGridPointFlag = true;
+            }
           }
-          //pc_ds->points.push_back (pcl::PointXYZ(1, 2, 0.5));
         }
       }
 
-      // Check if point accumulation policy is being violated
-      /*for (int d = 0; d < 6; d++)
-      {
-        for (int e = 0; e < 3; e++)
-        {
-          if (pointAccumulationCheckIndex[d][e].size() >= 10)
-          {
-            for (int f = 0; f < pointAccumulationCheckIndex[d][e].size(); f++)
-            {
-              pointNeedsRecenter.push_back(pointAccumulationCheckIndex[d][e][f]);
-            }
-            recenterOffGridPointFlag = true;
-          }
-          pointAccumulationCheckIndex[d][e].clear();
-        }
-      }*/
       calculateTrackpointFlag = false;
     }
 
@@ -554,14 +495,6 @@ void cbImu(const sensor_msgs::Imu::ConstPtr &msg)
       locationOfInitiation.clear();
       calculateWithBackwardMotion.clear();
       addToBackwardMotionVector = false;
-
-      for (int d = 0; d < 6; d++)
-      {
-        for (int e = 0; e < 3; e++)
-        {
-          pointAccumulationCheckIndex[d][e].clear();
-        }
-      }
 
       clearTrackingFlag = false;
       cout << "\nTracking Point Cleared!" << endl;
@@ -615,16 +548,12 @@ void cbImu(const sensor_msgs::Imu::ConstPtr &msg)
             if (pointNeedsRecenter[k] == calculateWithBackwardMotion[b])
             {
               calculateWithBackwardMotion.erase(calculateWithBackwardMotion.begin() + b);
-              //cout << "Removed from backward motion" << pointNeedsRecenter[k] << endl;
             }
           }
 
-        //cout << pointNeedsRecenter[k] << " ";
         // Presumed the point is recentered and can be cleared. If not, it will be fed back by main function.
         pointNeedsRecenter.erase(pointNeedsRecenter.begin() + k);
       }
-
-      //cout << endl;
 
       if (pointNeedsRecenter.empty())
             recenterOffGridPointFlag = false;
